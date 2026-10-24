@@ -97,7 +97,7 @@ $('f').onsubmit=e=>{e.preventDefault();const c=$('code').value.replace(/\D/g,'')
 async function lookup(code){
   $('out').innerHTML='';$('msg').textContent='Recherche…';
   try{
-    const r=await fetch('https://world.openfoodfacts.org/api/v2/product/'+code+'.json?fields=product_name,brands,image_front_small_url,nutriscore_grade,nova_group,additives_tags,allergens_tags,traces_tags,ingredients_text,nutriments');
+    const r=await fetch('https://world.openfoodfacts.org/api/v2/product/'+code+'.json?fields=product_name,product_name_fr,generic_name,generic_name_fr,abbreviated_product_name,categories,brands,image_front_small_url,nutriscore_grade,nova_group,additives_tags,allergens_tags,traces_tags,ingredients_text,nutriments');
     const d=await r.json();
     if(d.status!==1||!d.product){$('msg').textContent='Produit introuvable dans la base. Essaie un autre produit.';return}
     $('msg').textContent='';render(d.product,code);
@@ -111,6 +111,16 @@ const NAMES={101:'Riboflavine (vitamine B2)',270:'Acide lactique',296:'Acide mal
 const algName=k=>(ALG.find(a=>a[0]===k)||[k,k])[1];
 const tags=a=>(a||[]).map(t=>t.replace(/^en:/,''));
 
+function pname(p,code){
+  const t=x=>(x||'').trim();
+  const n=t(p.product_name)||t(p.product_name_fr)||t(p.generic_name_fr)||t(p.generic_name)||t(p.abbreviated_product_name);
+  if(n)return n;
+  const intro=t((p.ingredients_text||'').split(/ingr[ée]dients?\s*:/i)[0]);
+  if(intro.length>8&&intro.length<=90)return intro;
+  const cat=t((p.categories||'').split(',').pop());
+  if(cat)return cat+(p.brands?' – '+t(p.brands.split(',')[0]):'');
+  return 'Produit '+code;
+}
 function render(p,code){
   const n=p.nutriments||{},reasons=[];let pts=0,known=0;
   const ns=(p.nutriscore_grade||'').toLowerCase();
@@ -156,7 +166,7 @@ function render(p,code){
   else if(tr.length){reasons.unshift('Traces possibles : '+tr.map(algName).join(', '));if(cls==='good'){cls='mid';tit='Traces d’allergène possibles'}}
 
   const rank=(cls==='bad'?100:cls==='mid'?50:0)+pts;
-  const cur={name:p.product_name||'Produit sans nom',cls,tit,rank};
+  const cur={name:pname(p,code),cls,tit,rank};
   let cmpHtml='';
   if(cmp){
     const a=cmp,b=cur,w=a.rank===b.rank?null:(a.rank<b.rank?a:b);
@@ -164,7 +174,7 @@ function render(p,code){
     cmp=null;
   }
   const addRows=adds2.map(x=>`<div class="n"><span><i class="dot ${SAFE[x.num]?'good':'bad'}"></i>${esc(x.code)}</span><b style="text-align:right;max-width:65%;font-weight:400">${esc(NAMES[x.num]||'')}</b></div>`).join('');
-  const name=p.product_name||'Produit sans nom';
+  const name=pname(p,code);
   $('out').innerHTML=cmpHtml+`
   <div class="prod">${p.image_front_small_url?`<img src="${esc(p.image_front_small_url)}" alt="">`:''}<div><b>${esc(name)}</b><span class="small">${esc(p.brands||'')}</span></div></div>
   <div class="verdict ${cls}"><h2>${esc(tit)}</h2>${reasons.length?'<ul>'+reasons.map(r=>'<li>'+esc(r)+'</li>').join('')+'</ul>':''}</div>
