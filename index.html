@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14211B">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>Scan Aliments</title>
+<style>
+:root{--bg:#F2F5F3;--ink:#14211B;--mut:#5B6B62;--line:#D5DDD8;--card:#fff;--good:#1F8A4C;--mid:#D98200;--bad:#C93A2B}
+@media(prefers-color-scheme:dark){:root{--bg:#0F1713;--ink:#E8EFEA;--mut:#93A39A;--line:#25332B;--card:#17221C}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+main{max-width:520px;margin:0 auto;padding:16px}
+h1{font-size:1.5rem;margin:8px 0 16px}
+#reader{border-radius:14px;overflow:hidden;margin-bottom:12px}
+.row{display:flex;gap:8px;margin-bottom:12px}
+button,input[type=text],input:not([type]){font:inherit;border-radius:12px;border:1px solid var(--line);padding:12px 14px;background:var(--card);color:var(--ink)}
+#code{flex:1;min-width:0}
+button{background:var(--ink);color:var(--bg);border:0;font-weight:600;cursor:pointer}
+button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--good);outline-offset:2px}
+#scanBtn{width:100%;margin-bottom:12px;padding:16px}
+.verdict{border-radius:16px;padding:20px;color:#fff;margin:16px 0}
+.verdict.good{background:var(--good)}.verdict.mid{background:var(--mid)}.verdict.bad{background:var(--bad)}
+.verdict h2{margin:0 0 6px;font-size:1.6rem}
+.verdict ul{margin:8px 0 0;padding-left:20px}
+.prod{display:flex;gap:12px;align-items:center}
+.prod img{width:72px;height:72px;object-fit:contain;background:#fff;border-radius:10px}
+.prod b{display:block}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:4px 16px;margin-bottom:12px}
+.n{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.n:last-child{border:0}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;background:var(--line)}
+.dot.good{background:var(--good)}.dot.mid{background:var(--mid)}.dot.bad{background:var(--bad)}
+.small{color:var(--mut);font-size:.85rem}
+#msg{color:var(--mut);margin:8px 0}
+summary{cursor:pointer;font-weight:600;padding:12px 0}
+.opts label{display:flex;align-items:center;gap:10px;padding:8px 0;min-height:44px}
+.opts input{width:20px;height:20px;accent-color:var(--good)}
+.h{width:100%;text-align:left;background:none;color:var(--ink);border:0;border-bottom:1px solid var(--line);border-radius:0;padding:10px 0;display:flex;align-items:center;font-weight:400}
+.h:last-child{border:0}
+</style>
+</head>
+<body>
+<main>
+<h1>Scan Aliments</h1>
+<div id="reader"></div>
+<button id="scanBtn">Scanner un code-barres</button>
+<form class="row" id="f"><input id="code" inputmode="numeric" placeholder="ou tape le code-barres" aria-label="Code-barres"><button type="submit">Chercher</button></form>
+<div id="msg"></div>
+<div id="out"></div>
+<div class="card"><details class="opts"><summary>Mes critères</summary>
+<label><input type="checkbox" id="optAdd"> Refuser les produits avec additifs</label>
+<div class="small" style="padding:4px 0 8px">Les produits ultra-transformés (NOVA 4) sont toujours signalés « à éviter ».</div>
+<div class="small">Allergènes à éviter :</div><div id="alg"></div>
+</details></div>
+<div class="card"><details id="hd"><summary>Derniers scans</summary><div id="hist"></div></details></div>
+<p class="small">Verdict indicatif basé sur le niveau de transformation (NOVA), le Nutri-Score, les additifs et les repères nutritionnels. Données : Open Food Facts, parfois incomplètes : vérifie l’emballage en cas d’allergie. Ce n’est pas un avis médical.</p>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const S={get(k,d){try{const v=JSON.parse(localStorage.getItem(k));return v==null?d:v}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+let sc=null,on=false,cmp=null;
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+
+/* Mes critères */
+const ALG=[['gluten','Gluten'],['milk','Lait'],['eggs','Œufs'],['peanuts','Arachides'],['nuts','Fruits à coque'],['soybeans','Soja'],['fish','Poisson'],['crustaceans','Crustacés'],['molluscs','Mollusques'],['celery','Céleri'],['mustard','Moutarde'],['sesame-seeds','Sésame'],['sulphur-dioxide-and-sulphites','Sulfites'],['lupin','Lupin']];
+let myAlg=S.get('alg',[]),noAdd=S.get('noAdd',false);
+$('optAdd').checked=noAdd;
+$('optAdd').onchange=e=>{noAdd=e.target.checked;S.set('noAdd',noAdd)};
+$('alg').className='opts';
+$('alg').innerHTML=ALG.map(([k,n])=>`<label><input type="checkbox" value="${k}" ${myAlg.includes(k)?'checked':''}> ${n}</label>`).join('');
+$('alg').onchange=()=>{myAlg=[...$('alg').querySelectorAll('input:checked')].map(i=>i.value);S.set('alg',myAlg)};
+
+/* Historique */
+function hist(){return S.get('hist',[])}
+function addHist(code,name,cls,tit){const h=hist().filter(x=>x.code!==code);h.unshift({code,name,cls,tit});S.set('hist',h.slice(0,20));drawHist()}
+function drawHist(){
+  const h=hist();
+  $('hist').innerHTML=h.length?h.map(x=>`<button class="h" data-c="${esc(x.code)}"><i class="dot ${x.cls}"></i><span>${esc(x.name)}<br><span class="small">${esc(x.tit)}</span></span></button>`).join(''):'<p class="small">Aucun scan pour le moment.</p>';
+  $('hist').querySelectorAll('.h').forEach(b=>b.onclick=()=>{$('code').value=b.dataset.c;lookup(b.dataset.c)});
+}
+drawHist();
+
+/* Scan */
+async function stop(){if(sc&&on){try{await sc.stop()}catch(e){}on=false}$('scanBtn').textContent='Scanner un code-barres'}
+$('scanBtn').onclick=async()=>{
+  if(on){return stop()}
+  try{
+    sc=sc||new Html5Qrcode('reader',{formatsToSupport:[Html5QrcodeSupportedFormats.EAN_13,Html5QrcodeSupportedFormats.EAN_8,Html5QrcodeSupportedFormats.UPC_A,Html5QrcodeSupportedFormats.UPC_E]});
+    await sc.start({facingMode:'environment'},{fps:10,qrbox:{width:260,height:140}},async code=>{await stop();$('code').value=code;lookup(code)});
+    on=true;$('scanBtn').textContent='Arrêter la caméra';
+  }catch(e){$('msg').textContent='Caméra indisponible. Autorise l’accès à la caméra ou tape le code à la main.'}
+};
+$('f').onsubmit=e=>{e.preventDefault();const c=$('code').value.replace(/\D/g,'');if(c)lookup(c)};
+
+async function lookup(code){
+  $('out').innerHTML='';$('msg').textContent='Recherche…';
+  try{
+    const r=await fetch('https://world.openfoodfacts.org/api/v2/product/'+code+'.json?fields=product_name,brands,image_front_small_url,nutriscore_grade,nova_group,additives_tags,allergens_tags,traces_tags,ingredients_text,nutriments');
+    const d=await r.json();
+    if(d.status!==1||!d.product){$('msg').textContent='Produit introuvable dans la base. Essaie un autre produit.';return}
+    $('msg').textContent='';render(d.product,code);
+  }catch(e){$('msg').textContent='Pas de connexion. Réessaie avec du réseau.'}
+}
+
+const REP={'saturated-fat_100g':['Graisses saturées',1.5,5],'sugars_100g':['Sucres',5,22.5],'salt_100g':['Sel',0.3,1.5]};
+const lvl=(v,lo,hi)=>v<=lo?'good':v>hi?'bad':'mid';
+const algName=k=>(ALG.find(a=>a[0]===k)||[k,k])[1];
+const tags=a=>(a||[]).map(t=>t.replace(/^en:/,''));
+
+function render(p,code){
+  const n=p.nutriments||{},reasons=[];let pts=0,known=0;
+  const ns=(p.nutriscore_grade||'').toLowerCase();
+  if(ns&&'abcde'.includes(ns)){known++;const v='abcde'.indexOf(ns);pts+=v;if(v>=3)reasons.push('Nutri-Score '+ns.toUpperCase()+' : profil nutritionnel faible');else if(v<=1)reasons.push('Nutri-Score '+ns.toUpperCase()+' : bon profil nutritionnel')}
+  const nova=+p.nova_group;
+  if(nova){known++;if(nova===4){pts+=2;reasons.push('Ultra-transformé (NOVA 4)')}else if(nova===3){pts+=1;reasons.push('Transformé (NOVA 3)')}else reasons.push('Peu ou pas transformé (NOVA '+nova+')')}
+  const add=p.additives_tags||[];
+  if(add.length>=5)pts+=2;else if(add.length>=2)pts+=1;
+  if(p.additives_tags)reasons.push(add.length?add.length+' additif'+(add.length>1?'s':''):'Aucun additif');
+  let rows='';
+  const kcal=n['energy-kcal_100g'],fat=n['fat_100g'],car=n['carbohydrates_100g'],fib=n['fiber_100g'],pro=n['proteins_100g'];
+  if(kcal!=null)rows+=`<div class="n"><span>Énergie</span><b>${Math.round(kcal)} kcal</b></div>`;
+  if(fat!=null)rows+=`<div class="n"><span>Matières grasses</span><b>${(+fat).toFixed(1)} g</b></div>`;
+  for(const k in REP){
+    const [nom,lo,hi]=REP[k];const v=n[k];if(v==null)continue;
+    const l=lvl(+v,lo,hi);if(l==='bad'){pts+=1;reasons.push(nom+' élevé : '+(+v).toFixed(1)+' g/100 g')}
+    rows+=`<div class="n"><span><i class="dot ${l}"></i>${nom}</span><b>${(+v).toFixed(1)} g</b></div>`;
+  }
+  if(car!=null)rows+=`<div class="n"><span>Glucides</span><b>${(+car).toFixed(1)} g</b></div>`;
+  if(fib!=null)rows+=`<div class="n"><span><i class="dot ${fib>=3?'good':''}"></i>Fibres</span><b>${(+fib).toFixed(1)} g</b></div>`;
+  if(pro!=null)rows+=`<div class="n"><span>Protéines</span><b>${(+pro).toFixed(1)} g</b></div>`;
+
+  let cls,tit;
+  if(!known&&!rows){cls='mid';tit='Données insuffisantes'}
+  else if(pts<=2){cls='good';tit='Plutôt bon'}
+  else if(pts<=5){cls='mid';tit='À consommer avec modération'}
+  else{cls='bad';tit='À limiter'}
+
+  // règles strictes, par ordre de priorité
+  const hit=tags(p.allergens_tags).filter(a=>myAlg.includes(a));
+  const tr=tags(p.traces_tags).filter(a=>myAlg.includes(a));
+  if(nova===4){cls='bad';tit='Ultra-transformé : à éviter'}
+  if(noAdd&&add.length){cls='bad';tit='Contient des additifs'}
+  if(hit.length){cls='bad';tit='Allergène à éviter : '+hit.map(algName).join(', ')}
+  else if(tr.length){reasons.unshift('Traces possibles : '+tr.map(algName).join(', '));if(cls==='good'){cls='mid';tit='Traces d’allergène possibles'}}
+
+  const rank=(cls==='bad'?100:cls==='mid'?50:0)+pts;
+  const cur={name:p.product_name||'Produit sans nom',cls,tit,rank};
+  let cmpHtml='';
+  if(cmp){
+    const a=cmp,b=cur,w=a.rank===b.rank?null:(a.rank<b.rank?a:b);
+    cmpHtml=`<div class="card" style="padding:12px 16px"><div class="small">Comparaison</div><div class="row" style="margin:8px 0">${[a,b].map(x=>`<div class="verdict ${x.cls}" style="flex:1;margin:0;padding:12px"><b>${esc(x.name)}</b><div class="small" style="color:#fff">${esc(x.tit)}</div></div>`).join('')}</div><b>${w?'Meilleur choix : '+esc(w.name):'Égalité : les deux se valent'}</b></div>`;
+    cmp=null;
+  }
+  const adds=add.map(a=>a.replace(/^en:/,'').toUpperCase()).join(', ');
+  const name=p.product_name||'Produit sans nom';
+  $('out').innerHTML=cmpHtml+`
+  <div class="prod">${p.image_front_small_url?`<img src="${esc(p.image_front_small_url)}" alt="">`:''}<div><b>${esc(name)}</b><span class="small">${esc(p.brands||'')}</span></div></div>
+  <div class="verdict ${cls}"><h2>${esc(tit)}</h2>${reasons.length?'<ul>'+reasons.map(r=>'<li>'+esc(r)+'</li>').join('')+'</ul>':''}</div>
+  <button id="cmpBtn" style="width:100%;margin-bottom:12px">Comparer avec un autre produit</button>
+  ${rows?`<div class="card"><div class="small" style="padding-top:10px">Pour 100 g</div>${rows}</div>`:''}
+  ${adds?`<div class="card"><div class="n"><span>Additifs</span><b style="text-align:right;max-width:70%">${esc(adds)}</b></div></div>`:''}
+  ${p.ingredients_text?`<div class="card"><div class="small" style="padding-top:10px">Ingrédients</div><p>${esc(p.ingredients_text)}</p></div>`:''}`;
+  addHist(code,name,cls,tit);
+  $('cmpBtn').onclick=()=>{cmp=cur;$('out').innerHTML='';$('code').value='';$('msg').textContent='« '+cur.name+' » est gardé en mémoire. Scanne ou saisis le 2e produit.';window.scrollTo({top:0,behavior:'smooth'})};
+  $('out').scrollIntoView({behavior:'smooth'});
+}
+</script>
+</body>
+</html>
