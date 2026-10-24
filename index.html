@@ -51,8 +51,7 @@ summary{cursor:pointer;font-weight:600;padding:12px 0}
 <div id="msg"></div>
 <div id="out"></div>
 <div class="card"><details class="opts"><summary>Mes critères</summary>
-<label><input type="checkbox" id="optAdd"> Refuser les produits avec additifs</label>
-<div class="small" style="padding:4px 0 8px">Les produits ultra-transformés (NOVA 4) sont toujours signalés « à éviter ».</div>
+<div class="small" style="padding:4px 0 8px">Sont toujours signalés « à éviter » : les produits ultra-transformés (NOVA 4) et ceux qui contiennent un additif hors de ma liste d’additifs sans souci (vitamines C et E, acide citrique, pectines…). Les additifs sans souci restent affichés.</div>
 <div class="small">Allergènes à éviter :</div><div id="alg"></div>
 </details></div>
 <div class="card"><details id="hd"><summary>Derniers scans</summary><div id="hist"></div></details></div>
@@ -68,9 +67,7 @@ if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(
 
 /* Mes critères */
 const ALG=[['gluten','Gluten'],['milk','Lait'],['eggs','Œufs'],['peanuts','Arachides'],['nuts','Fruits à coque'],['soybeans','Soja'],['fish','Poisson'],['crustaceans','Crustacés'],['molluscs','Mollusques'],['celery','Céleri'],['mustard','Moutarde'],['sesame-seeds','Sésame'],['sulphur-dioxide-and-sulphites','Sulfites'],['lupin','Lupin']];
-let myAlg=S.get('alg',[]),noAdd=S.get('noAdd',false);
-$('optAdd').checked=noAdd;
-$('optAdd').onchange=e=>{noAdd=e.target.checked;S.set('noAdd',noAdd)};
+let myAlg=S.get('alg',[]);
 $('alg').className='opts';
 $('alg').innerHTML=ALG.map(([k,n])=>`<label><input type="checkbox" value="${k}" ${myAlg.includes(k)?'checked':''}> ${n}</label>`).join('');
 $('alg').onchange=()=>{myAlg=[...$('alg').querySelectorAll('input:checked')].map(i=>i.value);S.set('alg',myAlg)};
@@ -109,6 +106,8 @@ async function lookup(code){
 
 const REP={'saturated-fat_100g':['Graisses saturées',1.5,5],'sugars_100g':['Sucres',5,22.5],'salt_100g':['Sel',0.3,1.5]};
 const lvl=(v,lo,hi)=>v<=lo?'good':v>hi?'bad':'mid';
+const SAFE={101:1,270:1,296:1,300:1,301:1,306:1,322:1,330:1,331:1,334:1,406:1,440:1};
+const NAMES={101:'Riboflavine (vitamine B2)',270:'Acide lactique',296:'Acide malique',300:'Acide ascorbique (vitamine C)',301:'Ascorbate de sodium (vitamine C)',306:'Tocophérols (vitamine E)',322:'Lécithines',330:'Acide citrique',331:'Citrates de sodium',334:'Acide tartrique',406:'Agar-agar',440:'Pectines',249:'Nitrite de potassium',250:'Nitrite de sodium',251:'Nitrate de sodium',252:'Nitrate de potassium',450:'Diphosphates',451:'Triphosphates',452:'Polyphosphates'};
 const algName=k=>(ALG.find(a=>a[0]===k)||[k,k])[1];
 const tags=a=>(a||[]).map(t=>t.replace(/^en:/,''));
 
@@ -119,8 +118,16 @@ function render(p,code){
   const nova=+p.nova_group;
   if(nova){known++;if(nova===4){pts+=2;reasons.push('Ultra-transformé (NOVA 4)')}else if(nova===3){pts+=1;reasons.push('Transformé (NOVA 3)')}else reasons.push('Peu ou pas transformé (NOVA '+nova+')')}
   const add=p.additives_tags||[];
-  if(add.length>=5)pts+=2;else if(add.length>=2)pts+=1;
-  if(p.additives_tags)reasons.push(add.length?add.length+' additif'+(add.length>1?'s':''):'Aucun additif');
+  const adds2=add.map(a=>{const c=a.replace(/^en:/,'').toUpperCase();const m=c.match(/^E(\d+)/);return {code:c,num:m?+m[1]:0}});
+  const okA=adds2.filter(x=>SAFE[x.num]),koA=adds2.filter(x=>!SAFE[x.num]);
+  pts+=koA.length>=3?2:koA.length?1:0;
+  if(p.additives_tags){
+    if(!add.length)reasons.push('Aucun additif');
+    else{
+      if(koA.length)reasons.push('Additifs à éviter : '+koA.map(x=>x.code).join(', '));
+      if(okA.length)reasons.push('Additifs sans souci : '+okA.map(x=>x.code).join(', '));
+    }
+  }
   let rows='';
   const kcal=n['energy-kcal_100g'],fat=n['fat_100g'],car=n['carbohydrates_100g'],fib=n['fiber_100g'],pro=n['proteins_100g'];
   if(kcal!=null)rows+=`<div class="n"><span>Énergie</span><b>${Math.round(kcal)} kcal</b></div>`;
@@ -144,7 +151,7 @@ function render(p,code){
   const hit=tags(p.allergens_tags).filter(a=>myAlg.includes(a));
   const tr=tags(p.traces_tags).filter(a=>myAlg.includes(a));
   if(nova===4){cls='bad';tit='Ultra-transformé : à éviter'}
-  if(noAdd&&add.length){cls='bad';tit='Contient des additifs'}
+  if(koA.length){cls='bad';tit='Additif à éviter : '+koA.map(x=>x.code).join(', ')}
   if(hit.length){cls='bad';tit='Allergène à éviter : '+hit.map(algName).join(', ')}
   else if(tr.length){reasons.unshift('Traces possibles : '+tr.map(algName).join(', '));if(cls==='good'){cls='mid';tit='Traces d’allergène possibles'}}
 
@@ -156,14 +163,14 @@ function render(p,code){
     cmpHtml=`<div class="card" style="padding:12px 16px"><div class="small">Comparaison</div><div class="row" style="margin:8px 0">${[a,b].map(x=>`<div class="verdict ${x.cls}" style="flex:1;margin:0;padding:12px"><b>${esc(x.name)}</b><div class="small" style="color:#fff">${esc(x.tit)}</div></div>`).join('')}</div><b>${w?'Meilleur choix : '+esc(w.name):'Égalité : les deux se valent'}</b></div>`;
     cmp=null;
   }
-  const adds=add.map(a=>a.replace(/^en:/,'').toUpperCase()).join(', ');
+  const addRows=adds2.map(x=>`<div class="n"><span><i class="dot ${SAFE[x.num]?'good':'bad'}"></i>${esc(x.code)}</span><b style="text-align:right;max-width:65%;font-weight:400">${esc(NAMES[x.num]||'')}</b></div>`).join('');
   const name=p.product_name||'Produit sans nom';
   $('out').innerHTML=cmpHtml+`
   <div class="prod">${p.image_front_small_url?`<img src="${esc(p.image_front_small_url)}" alt="">`:''}<div><b>${esc(name)}</b><span class="small">${esc(p.brands||'')}</span></div></div>
   <div class="verdict ${cls}"><h2>${esc(tit)}</h2>${reasons.length?'<ul>'+reasons.map(r=>'<li>'+esc(r)+'</li>').join('')+'</ul>':''}</div>
   <button id="cmpBtn" style="width:100%;margin-bottom:12px">Comparer avec un autre produit</button>
   ${rows?`<div class="card"><div class="small" style="padding-top:10px">Pour 100 g</div>${rows}</div>`:''}
-  ${adds?`<div class="card"><div class="n"><span>Additifs</span><b style="text-align:right;max-width:70%">${esc(adds)}</b></div></div>`:''}
+  ${addRows?`<div class="card"><div class="small" style="padding-top:10px">Additifs</div>${addRows}</div>`:''}
   ${p.ingredients_text?`<div class="card"><div class="small" style="padding-top:10px">Ingrédients</div><p>${esc(p.ingredients_text)}</p></div>`:''}`;
   addHist(code,name,cls,tit);
   $('cmpBtn').onclick=()=>{cmp=cur;$('out').innerHTML='';$('code').value='';$('msg').textContent='« '+cur.name+' » est gardé en mémoire. Scanne ou saisis le 2e produit.';window.scrollTo({top:0,behavior:'smooth'})};
